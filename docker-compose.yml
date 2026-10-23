@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: carwash-db
+    environment:
+      POSTGRES_USER: carwash
+      POSTGRES_PASSWORD: carwash
+      POSTGRES_DB: carwash
+    ports:
+      - "5433:5432"   # 5433 на хості, щоб не конфліктувати з локальним Postgres
+    volumes:
+      - carwash-data:/var/lib/postgresql/data
+
+volumes:
+  carwash-data:
