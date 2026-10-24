@@ -8,7 +8,8 @@ from app.schemas.service import ServiceShort
 
 
 class BookingCreate(BaseModel):
-    client_id: int
+    # Клієнт не передає це поле (береться з токена); адміністратор записує клієнта за його id
+    client_id: int | None = None
     car_id: int
     service_ids: list[int] = Field(min_length=1, max_length=10)
     # AwareDatetime вимагає часовий пояс («2026-10-25T10:00:00+03:00»): без нього час неоднозначний
@@ -46,14 +47,16 @@ class BookingRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    client_id: int
+    # Клієнт не передає це поле (береться з токена); адміністратор записує клієнта за його id
+    client_id: int | None = None
     car_id: int
     bay_id: int
     master_id: int | None
     scheduled_at: datetime
     ends_at: datetime
     status: BookingStatus
-    total_price: Decimal
+    total_price: Decimal            # підсумок уже зі знижкою
+    discount_percent: Decimal       # знижка «тихих годин», 0 — якщо не діяла
     created_at: datetime
     items: list[BookingItemRead]
 
@@ -62,3 +65,7 @@ class Slot(BaseModel):
     start: datetime
     end: datetime
     free_bays: int
+    base_price: Decimal                 # ціна без знижки
+    price: Decimal                      # ціна, яку заплатить клієнт, обравши цей слот
+    discount_percent: Decimal
+    rule_name: str | None = None        # яке правило дало знижку («Будні вранці»)

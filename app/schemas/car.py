@@ -25,8 +25,8 @@ class CarBase(BaseModel):
 
 
 class CarCreate(CarBase):
-    # У лабі 2 власника братимемо з токена, а поки він передається явно
-    owner_id: int
+    # Клієнт додає авто собі (власник береться з токена), а адмін і майстер вказують owner_id
+    owner_id: int | None = None
 
 
 class CarUpdate(BaseModel):

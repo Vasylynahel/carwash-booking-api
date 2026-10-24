@@ -4,6 +4,7 @@
 Скрипт можна запускати повторно: те, що вже є, він не дублює.
 Ціни орієнтовні, їх легко підправити нижче.
 """
+from datetime import time
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -11,7 +12,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
-from app.models import Bay, Service, ServiceCategory, User, UserRole
+from app.models import Bay, PricingRule, Service, ServiceCategory, User, UserRole
 
 W, P, A, D = (
     ServiceCategory.WASH,
@@ -40,13 +41,21 @@ SERVICES = [
 
 BAYS = ["Пост 1", "Пост 2", "Пост 3"]
 
+# Стартові правила «тихих годин»: (назва, день тижня або None, з, до, знижка %)
+PRICING_RULES = [
+    ("Ранкова знижка", None, time(9, 0), time(11, 0), 10),
+    ("Тихий вівторок", 1, time(13, 0), time(17, 0), 15),
+    ("Тиха середа", 2, time(13, 0), time(17, 0), 15),
+    ("Тихий четвер", 3, time(13, 0), time(17, 0), 15),
+]
+
 
 def main() -> None:
     with SessionLocal() as db:
-        if not db.scalar(select(User.id).where(User.email == "admin@carwash.local")):
+        if not db.scalar(select(User.id).where(User.email == settings.seed_admin_email)):
             db.add(
                 User(
-                    email="admin@carwash.local",
+                    email=settings.seed_admin_email,
                     password_hash=hash_password(settings.seed_admin_password),
                     full_name="Адміністратор",
                     role=UserRole.ADMIN,
@@ -66,8 +75,16 @@ def main() -> None:
                         description=description,
                     )
                 )
+        for name, weekday, start, end, percent in PRICING_RULES:
+            if not db.scalar(select(PricingRule.id).where(PricingRule.name == name)):
+                db.add(
+                    PricingRule(
+                        name=name, weekday=weekday, start_time=start, end_time=end,
+                        discount_percent=Decimal(percent),
+                    )
+                )
         db.commit()
-    print("Готово: адмін, пости та каталог послуг додано")
+    print("Готово: адмін, пости, каталог послуг і правила знижок додано")
 
 
 if __name__ == "__main__":

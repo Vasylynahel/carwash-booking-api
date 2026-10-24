@@ -10,8 +10,9 @@ class AppError(Exception):
 
     status_code = 400
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, headers: dict[str, str] | None = None):
         self.message = message
+        self.headers = headers
 
 
 class NotFoundError(AppError):
@@ -26,6 +27,29 @@ class BusinessRuleError(AppError):
     status_code = 422
 
 
+class UnauthorizedError(AppError):
+    """401: не вхід — немає токена, він недійсний або прострочений."""
+
+    status_code = 401
+
+    def __init__(self, message: str = "Необхідна автентифікація"):
+        super().__init__(message, headers={"WWW-Authenticate": "Bearer"})
+
+
+class ForbiddenError(AppError):
+    """403: користувача впізнали, але прав на цю дію в нього немає."""
+
+    status_code = 403
+
+
+class PayloadTooLargeError(AppError):
+    status_code = 413
+
+
+class TooManyRequestsError(AppError):
+    status_code = 429
+
+
 def _body(message: str, details: list | None = None) -> dict:
     body: dict = {"error": message}
     if details:
@@ -38,7 +62,9 @@ def register_error_handlers(app: FastAPI) -> None:
     # щоб клієнту (React) було просто їх показувати.
     @app.exception_handler(AppError)
     async def app_error(_: Request, exc: AppError):
-        return JSONResponse(status_code=exc.status_code, content=_body(exc.message))
+        return JSONResponse(
+            status_code=exc.status_code, content=_body(exc.message), headers=exc.headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_: Request, exc: RequestValidationError):

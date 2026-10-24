@@ -27,7 +27,12 @@ class Booking(Base):
     # Кінець рахуємо один раз при створенні (початок + сума тривалостей послуг)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[BookingStatus] = mapped_column(enum_col(BookingStatus), default=BookingStatus.PLANNED)
+    # Підсумкова ціна вже зі знижкою «тихих годин»; сама знижка збережена окремо,
+    # щоб історія була прозорою навіть після зміни правил
     total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    discount_percent: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("0.00"), server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

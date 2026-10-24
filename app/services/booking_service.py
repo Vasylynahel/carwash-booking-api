@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.models import Bay, Booking, BookingService, BookingStatus, Car, Service, User, UserRole
 from app.schemas.booking import BookingCreate, Slot
+from app.services import pricing_service
 
 # Які переходи статусів дозволені. «Виконано» і «скасовано» — фінальні.
 ALLOWED_TRANSITIONS: dict[BookingStatus, set[BookingStatus]] = {
@@ -100,7 +101,7 @@ def create_booking(db: Session, data: BookingCreate) -> Booking:
 
     services = _load_services(db, data.service_ids)
     total_minutes = sum(s.duration_minutes for s in services)
-    total_price: Decimal = sum((s.price for s in services), Decimal("0"))
+    base_total: Decimal = sum((s.price for s in services), Decimal("0"))
 
     start = _utc(data.scheduled_at)
     end = start + timedelta(minutes=total_minutes)
@@ -108,6 +109,11 @@ def create_booking(db: Session, data: BookingCreate) -> Booking:
     if start <= datetime.now(UTC):
         raise BusinessRuleError("Не можна записатися на час, який уже минув")
     _check_working_hours(start, end)
+
+    # «Розумні ціни»: якщо час потрапляє в тихі години, діє найбільша знижка (вони не складаються)
+    rule = pricing_service.best_rule(pricing_service.active_rules(db), start.astimezone(settings.tz))
+    discount = rule.discount_percent if rule else Decimal("0.00")
+    total_price = pricing_service.apply_discount(base_total, discount)
 
     # Блокую рядки постів (SELECT ... FOR UPDATE): якщо двоє клієнтів одночасно
     # хочуть один слот, другий запит дочекається першого й уже побачить його запис.
@@ -142,6 +148,7 @@ def create_booking(db: Session, data: BookingCreate) -> Booking:
         scheduled_at=start,
         ends_at=end,
         total_price=total_price,
+        discount_percent=discount,
         status=BookingStatus.PLANNED,
         items=[
             BookingService(service_id=s.id, price=s.price, duration_minutes=s.duration_minutes)
@@ -211,6 +218,8 @@ def available_slots(db: Session, day: date, service_ids: list[int]) -> list[Slot
     """
     services = _load_services(db, service_ids)
     duration = timedelta(minutes=sum(s.duration_minutes for s in services))
+    base_price: Decimal = sum((s.price for s in services), Decimal("0"))
+    rules = pricing_service.active_rules(db)
     open_at, close_at = day_bounds(day)
 
     bay_ids = db.scalars(select(Bay.id).where(Bay.is_active.is_(True))).all()
@@ -234,11 +243,18 @@ def available_slots(db: Session, day: date, service_ids: list[int]) -> list[Slot
                 if not any(b == bay_id and s < end and e > cursor for b, s, e in busy)
             )
             if free:
+                local_start = cursor.astimezone(settings.tz)
+                rule = pricing_service.best_rule(rules, local_start)
+                percent = rule.discount_percent if rule else Decimal("0.00")
                 slots.append(
                     Slot(
-                        start=cursor.astimezone(settings.tz),
+                        start=local_start,
                         end=end.astimezone(settings.tz),
                         free_bays=free,
+                        base_price=base_price,
+                        price=pricing_service.apply_discount(base_price, percent),
+                        discount_percent=percent,
+                        rule_name=rule.name if rule else None,
                     )
                 )
         cursor += step
