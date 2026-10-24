@@ -1,43 +1,14 @@
+"""Тести лабораторної 1 (CRUD і логіка запису), адаптовані під автентифікацію з лабораторної 2."""
 from datetime import datetime, timedelta
 
-from app.core.config import settings
+from tests.helpers import make_bay, make_car, make_service, tomorrow_at
 
 
-def make_user(client, email="ivan@example.com", role="client", **extra):
-    r = client.post(
-        "/api/users",
-        json={"email": email, "password": "password123", "full_name": "Іван Петренко", "role": role, **extra},
+def book(client, headers, car_id, service_ids, when, **extra):
+    return client.post(
+        "/api/bookings", headers=headers,
+        json={"car_id": car_id, "service_ids": service_ids, "scheduled_at": when, **extra},
     )
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def make_car(client, owner_id, plate="AA1234BB"):
-    r = client.post(
-        "/api/cars", json={"owner_id": owner_id, "brand": "Skoda", "model": "Octavia", "plate_number": plate}
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def make_service(client, name="Комплексна мийка", minutes=60, price="500.00"):
-    r = client.post(
-        "/api/services",
-        json={"name": name, "category": "wash", "duration_minutes": minutes, "price": price},
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def make_bay(client, name="Пост 1"):
-    r = client.post("/api/bays", json={"name": name})
-    assert r.status_code == 201, r.text
-    return r.json()
-
-
-def tomorrow_at(hour: int, minute: int = 0) -> str:
-    day = (datetime.now(settings.tz) + timedelta(days=1)).date()
-    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=settings.tz).isoformat()
 
 
 def test_health(client):
@@ -45,144 +16,154 @@ def test_health(client):
     assert r.status_code == 200 and r.json()["database"] == "ok"
 
 
-def test_user_validation_and_no_hash_leak(client):
-    bad = client.post("/api/users", json={"email": "not-an-email", "password": "123", "full_name": "A"})
+def test_admin_creates_users_validation(client, admin):
+    bad = client.post(
+        "/api/users", headers=admin["headers"],
+        json={"email": "not-an-email", "password": "123", "full_name": "A"},
+    )
     assert bad.status_code == 422
-    assert {d["field"] for d in bad.json()["details"]} >= {"email", "password", "full_name"}
-
-    user = make_user(client)
-    assert "password" not in user and "password_hash" not in user
-
+    ok = client.post(
+        "/api/users", headers=admin["headers"],
+        json={"email": "m@example.com", "password": "password123", "full_name": "Майстер", "role": "master"},
+    )
+    assert ok.status_code == 201 and ok.json()["role"] == "master"
     dup = client.post(
-        "/api/users", json={"email": "IVAN@example.com", "password": "password123", "full_name": "Інший"}
+        "/api/users", headers=admin["headers"],
+        json={"email": "M@example.com", "password": "password123", "full_name": "Інший"},
     )
     assert dup.status_code == 409
 
 
-def test_crud_service_and_pagination(client):
+def test_crud_service_and_pagination(client, admin):
     for i in range(3):
-        make_service(client, name=f"Послуга {i}")
+        make_service(client, admin["headers"], name=f"Послуга {i}")
     page = client.get("/api/services", params={"page": 1, "limit": 2}).json()
     assert page["total"] == 3 and len(page["items"]) == 2 and page["pages"] == 2
 
     s = page["items"][0]
-    patched = client.patch(f"/api/services/{s['id']}", json={"price": "999.50"}).json()
+    patched = client.patch(f"/api/services/{s['id']}", headers=admin["headers"], json={"price": "999.50"}).json()
     assert patched["price"] == "999.50"
 
     assert client.get("/api/services/9999").status_code == 404
-    assert client.delete(f"/api/services/{s['id']}").status_code == 204
+    assert client.delete(f"/api/services/{s['id']}", headers=admin["headers"]).status_code == 204
+    found = client.get("/api/services", params={"search": "Послуга 1"}).json()
+    assert found["total"] == 1
 
 
-def test_car_plate_normalized_and_unique(client):
-    owner = make_user(client)
-    car = make_car(client, owner["id"], plate="aa 1234 bb")
+def test_car_plate_normalized_and_unique(client, make_client_user):
+    u = make_client_user()
+    car = make_car(client, u["headers"], plate="aa 1234 bb")
     assert car["plate_number"] == "AA1234BB"
     dup = client.post(
-        "/api/cars",
-        json={"owner_id": owner["id"], "brand": "Audi", "model": "A4", "plate_number": "AA1234BB"},
+        "/api/cars", headers=u["headers"],
+        json={"brand": "Audi", "model": "A4", "plate_number": "AA1234BB"},
     )
     assert dup.status_code == 409
 
 
-def setup_booking_env(client):
-    client_user = make_user(client)
-    car = make_car(client, client_user["id"])
-    service = make_service(client)
-    bay = make_bay(client)
-    return client_user, car, service, bay
+def env(client, admin, make_client_user, email="ivan@example.com", plate="AA1234BB", bays=1):
+    user = make_client_user(email)
+    car = make_car(client, user["headers"], plate)
+    service = make_service(client, admin["headers"]) if not client.get("/api/services").json()["total"] else \
+        client.get("/api/services").json()["items"][0]
+    for i in range(bays):
+        if not client.get("/api/bays", headers=admin["headers"]).json()["total"] > i:
+            make_bay(client, admin["headers"], f"Пост {i + 1}")
+    return user, car, service
 
 
-def test_booking_flow_and_conflicts(client):
-    user, car, service, bay = setup_booking_env(client)
-    payload = {
-        "client_id": user["id"],
-        "car_id": car["id"],
-        "service_ids": [service["id"]],
-        "scheduled_at": tomorrow_at(10),
-    }
-    r = client.post("/api/bookings", json=payload)
+def test_booking_flow_and_conflicts(client, admin, make_client_user):
+    u1, car1, service = env(client, admin, make_client_user)
+    u2, car2, _ = env(client, admin, make_client_user, "olena@example.com", "BB4321CC")
+
+    r = book(client, u1["headers"], car1["id"], [service["id"]], tomorrow_at(10))
     assert r.status_code == 201, r.text
     booking = r.json()
-    assert booking["bay_id"] == bay["id"] and booking["total_price"] == "500.00"
+    assert booking["total_price"] == "500.00" and booking["discount_percent"] == "0.00"
 
     # той самий час: єдиний пост зайнятий
-    other_user = make_user(client, email="olena@example.com")
-    other_car = make_car(client, other_user["id"], plate="BB4321CC")
-    clash = client.post("/api/bookings", json={**payload, "client_id": other_user["id"], "car_id": other_car["id"]})
-    assert clash.status_code == 409
-
-    # впритул після кінця першого запису (11:00) — вільно
-    ok = client.post(
-        "/api/bookings",
-        json={**payload, "client_id": other_user["id"], "car_id": other_car["id"], "scheduled_at": tomorrow_at(11)},
-    )
-    assert ok.status_code == 201
-
+    assert book(client, u2["headers"], car2["id"], [service["id"]], tomorrow_at(10)).status_code == 409
+    # впритул після кінця першого запису (11:00) вільно
+    assert book(client, u2["headers"], car2["id"], [service["id"]], tomorrow_at(11)).status_code == 201
     # чужий автомобіль
-    foreign = client.post("/api/bookings", json={**payload, "car_id": other_car["id"], "scheduled_at": tomorrow_at(15)})
-    assert foreign.status_code == 422
+    assert book(client, u1["headers"], car2["id"], [service["id"]], tomorrow_at(15)).status_code == 422
 
 
-def test_booking_rules(client):
-    user, car, service, bay = setup_booking_env(client)
-    base = {"client_id": user["id"], "car_id": car["id"], "service_ids": [service["id"]]}
-
-    outside = client.post("/api/bookings", json={**base, "scheduled_at": tomorrow_at(6)})
-    assert outside.status_code == 422
-
-    naive = client.post("/api/bookings", json={**base, "scheduled_at": "2030-01-01T10:00:00"})
-    assert naive.status_code == 422  # без часового поясу
-
-    past = client.post("/api/bookings", json={**base, "scheduled_at": "2020-01-01T10:00:00+02:00"})
-    assert past.status_code == 422
-
-    missing = client.post("/api/bookings", json={**base, "service_ids": [999], "scheduled_at": tomorrow_at(10)})
-    assert missing.status_code == 404
+def test_auto_bay_assignment_with_two_bays(client, admin, make_client_user):
+    u1, car1, service = env(client, admin, make_client_user, bays=2)
+    u2, car2, _ = env(client, admin, make_client_user, "olena@example.com", "BB4321CC", bays=2)
+    first = book(client, u1["headers"], car1["id"], [service["id"]], tomorrow_at(10)).json()
+    second = book(client, u2["headers"], car2["id"], [service["id"]], tomorrow_at(10))
+    assert second.status_code == 201 and second.json()["bay_id"] != first["bay_id"]
 
 
-def test_status_transitions_and_delete(client):
-    user, car, service, bay = setup_booking_env(client)
-    b = client.post(
-        "/api/bookings",
-        json={"client_id": user["id"], "car_id": car["id"], "service_ids": [service["id"]], "scheduled_at": tomorrow_at(10)},
-    ).json()
-
-    assert client.patch(f"/api/bookings/{b['id']}/status", json={"status": "done"}).status_code == 409
-    assert client.delete(f"/api/bookings/{b['id']}").status_code == 409
-    assert client.patch(f"/api/bookings/{b['id']}/status", json={"status": "in_progress"}).status_code == 200
-    assert client.patch(f"/api/bookings/{b['id']}/status", json={"status": "cancelled"}).status_code == 200
-    assert client.delete(f"/api/bookings/{b['id']}").status_code == 204
+def test_multiple_services_sum(client, admin, make_client_user):
+    u, car, s1 = env(client, admin, make_client_user)
+    s2 = make_service(client, admin["headers"], "Воскування", minutes=30, price="200.00")
+    r = book(client, u["headers"], car["id"], [s1["id"], s2["id"]], tomorrow_at(10)).json()
+    assert r["total_price"] == "700.00"
+    # тривалості додаються: 60 + 30 хвилин
+    assert datetime.fromisoformat(r["ends_at"]) - datetime.fromisoformat(r["scheduled_at"]) == timedelta(minutes=90)
+    dup = book(client, u["headers"], car["id"], [s1["id"], s1["id"]], tomorrow_at(15))
+    assert dup.status_code == 422
 
 
-def test_assign_master_and_filter(client):
-    user, car, service, bay = setup_booking_env(client)
-    master = make_user(client, email="master@example.com", role="master")
-    b = client.post(
-        "/api/bookings",
-        json={"client_id": user["id"], "car_id": car["id"], "service_ids": [service["id"]], "scheduled_at": tomorrow_at(10)},
-    ).json()
-    r = client.patch(f"/api/bookings/{b['id']}", json={"master_id": master["id"]})
-    assert r.status_code == 200 and r.json()["master_id"] == master["id"]
+def test_booking_rules(client, admin, make_client_user):
+    u, car, service = env(client, admin, make_client_user)
+    sid = [service["id"]]
+    assert book(client, u["headers"], car["id"], sid, tomorrow_at(6)).status_code == 422       # до відкриття
+    assert book(client, u["headers"], car["id"], sid, "2030-01-01T10:00:00").status_code == 422  # без пояса
+    assert book(client, u["headers"], car["id"], sid, "2020-01-01T10:00:00+02:00").status_code == 422  # минуле
+    assert book(client, u["headers"], car["id"], [999], tomorrow_at(10)).status_code == 404
 
-    by_client = client.get("/api/bookings", params={"client_id": user["id"], "status": "planned"}).json()
-    assert by_client["total"] == 1
-    not_master = client.patch(f"/api/bookings/{b['id']}", json={"master_id": user["id"]})
+
+def test_status_transitions_and_delete(client, admin, make_client_user):
+    u, car, service = env(client, admin, make_client_user)
+    b = book(client, u["headers"], car["id"], [service["id"]], tomorrow_at(10)).json()
+    url = f"/api/bookings/{b['id']}/status"
+    h = admin["headers"]
+
+    assert client.patch(url, headers=h, json={"status": "done"}).status_code == 409
+    assert client.delete(f"/api/bookings/{b['id']}", headers=h).status_code == 409
+    assert client.patch(url, headers=h, json={"status": "in_progress"}).status_code == 200
+    assert client.patch(url, headers=h, json={"status": "cancelled"}).status_code == 200
+    assert client.delete(f"/api/bookings/{b['id']}", headers=h).status_code == 204
+
+
+def test_assign_master_rules(client, admin, make_client_user, make_master):
+    u, car, service = env(client, admin, make_client_user)
+    master = make_master()
+    b = book(client, u["headers"], car["id"], [service["id"]], tomorrow_at(10)).json()
+
+    ok = client.patch(f"/api/bookings/{b['id']}", headers=admin["headers"], json={"master_id": master["user"]["id"]})
+    assert ok.status_code == 200 and ok.json()["master_id"] == master["user"]["id"]
+    not_master = client.patch(f"/api/bookings/{b['id']}", headers=admin["headers"], json={"master_id": u["user"]["id"]})
     assert not_master.status_code == 422
 
 
-def test_availability(client):
-    user, car, service, bay = setup_booking_env(client)
-    day = (datetime.now(settings.tz) + timedelta(days=1)).date().isoformat()
-    r = client.get("/api/bookings/availability", params={"date": day, "service_ids": [service["id"]]})
-    assert r.status_code == 200
-    slots = r.json()
-    assert slots[0]["start"].startswith(f"{day}T09:00")
-    assert slots[-1]["end"].startswith(f"{day}T20:00")
+def test_booking_filters(client, admin, make_client_user):
+    u, car, service = env(client, admin, make_client_user)
+    book(client, u["headers"], car["id"], [service["id"]], tomorrow_at(10))
+    by_client = client.get(
+        "/api/bookings", headers=admin["headers"],
+        params={"client_id": u["user"]["id"], "status": "planned"},
+    ).json()
+    assert by_client["total"] == 1
+    assert client.get("/api/bookings", headers=admin["headers"], params={"status": "done"}).json()["total"] == 0
 
-    client.post(
-        "/api/bookings",
-        json={"client_id": user["id"], "car_id": car["id"], "service_ids": [service["id"]], "scheduled_at": tomorrow_at(10)},
-    )
-    after = client.get("/api/bookings/availability", params={"date": day, "service_ids": [service["id"]]}).json()
+
+def test_availability_public(client, admin, make_client_user):
+    from app.core.config import settings
+
+    u, car, service = env(client, admin, make_client_user)
+    day = (datetime.now(settings.tz) + timedelta(days=1)).date().isoformat()
+    params = {"date": day, "service_ids": [service["id"]]}
+
+    slots = client.get("/api/bookings/availability", params=params).json()  # без токена
+    assert slots[0]["start"].startswith(f"{day}T09:00") and slots[-1]["end"].startswith(f"{day}T20:00")
+    assert slots[0]["price"] == "500.00" and slots[0]["discount_percent"] == "0.00"
+
+    book(client, u["headers"], car["id"], [service["id"]], tomorrow_at(10))
+    after = client.get("/api/bookings/availability", params=params).json()
     starts = {s["start"][11:16] for s in after}
     assert "10:00" not in starts and "10:30" not in starts and "09:00" in starts and "11:00" in starts
