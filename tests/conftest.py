@@ -5,12 +5,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
-from app.core import rate_limit
+from app.core import cache, database, rate_limit
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.core.security import hash_password
 from app.main import app
 from app.models import User, UserRole
+from app.realtime import presence
 
 
 @pytest.fixture(autouse=True)
@@ -20,10 +21,12 @@ def isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "rate_limit_enabled", False)
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     rate_limit.reset_limits()
+    cache.clear()  # кеш правил і аналітики не повинен переходити з тесту в тест
+    presence.clear()
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     # Тести йдуть на SQLite в пам'яті: швидко й без Docker.
     # Логіку перевіряє повністю; специфічне для Postgres (FOR UPDATE) тут ігнорується.
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -35,6 +38,8 @@ def client():
             yield db
 
     app.dependency_overrides[get_db] = override_get_db
+    # Обробники Socket.IO та фонові завдання беруть сесію напряму, тому підміняємо її теж
+    monkeypatch.setattr(database, "SessionLocal", Session)
     c = TestClient(app)
     c.Session = Session
     yield c

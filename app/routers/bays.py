@@ -2,6 +2,7 @@ from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 
 from app.core.audit import Audit
+from app.realtime import publisher
 from app.core.auth import AdminUser, StaffUser
 from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import paginate
@@ -35,6 +36,7 @@ def create_bay(data: BayCreate, admin: AdminUser, db: DbSession, audit: Audit):
     db.add(bay)
     db.commit()
     audit.log("bay.create", admin, "bay", bay.id)
+    publisher.publish_catalog("bay", bay.id, "created")
     return bay
 
 
@@ -61,6 +63,7 @@ def update_bay(bay_id: int, data: BayUpdate, admin: AdminUser, db: DbSession, au
         setattr(bay, field, value)
     db.commit()
     audit.log("bay.update", admin, "bay", bay.id, {"fields": sorted(changes)})
+    publisher.publish_catalog("bay", bay.id, "updated")
     return bay
 
 
@@ -70,4 +73,5 @@ def delete_bay(bay_id: int, admin: AdminUser, db: DbSession, audit: Audit):
     db.delete(bay)
     db.commit()  # пост, на якому були записи, не видалити: деактивуйте його
     audit.log("bay.delete", admin, "bay", bay_id)
+    publisher.publish_catalog("bay", bay_id, "deleted")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

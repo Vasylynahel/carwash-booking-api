@@ -15,6 +15,9 @@ class Booking(Base):
         CheckConstraint("ends_at > scheduled_at", name="ck_bookings_time_order"),
         # Під перевірку перетину слотів на конкретному посту
         Index("ix_bookings_bay_time", "bay_id", "scheduled_at", "ends_at"),
+        # Фільтри адміністратора й аналітика завантаженості: за статусом і датою
+        Index("ix_bookings_status_scheduled", "status", "scheduled_at"),
+        Index("ix_bookings_scheduled", "scheduled_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

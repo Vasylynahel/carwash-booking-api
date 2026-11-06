@@ -19,3 +19,9 @@ class BookingStatus(str, enum.Enum):
     IN_PROGRESS = "in_progress"
     DONE = "done"
     CANCELLED = "cancelled"
+
+
+class NotificationPriority(str, enum.Enum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"

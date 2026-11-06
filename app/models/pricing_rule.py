@@ -28,4 +28,7 @@ class PricingRule(Base):
     end_time: Mapped[time] = mapped_column(Time)
     discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Правила, які створила система за історією завантаженості. Ручні правила адміністратора
+    # мають пріоритет над ними
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

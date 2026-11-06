@@ -41,6 +41,38 @@ class Settings(BaseSettings):
     rate_limit_auth: int = 10              # спроб входу/реєстрації за хвилину
 
     # .local та інші службові домени email-validator відхиляє, тому адмін за замовчуванням на example.com
+    # --- Лабораторна 3 ---
+    # Додаткові origin-и для Socket.IO (демо-сторінка /demo відкривається з самого бекенду)
+    extra_cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
+    # Якщо задано, Socket.IO працює через Redis і масштабується на кілька копій сервера
+    redis_url: str | None = None
+
+    # Пул з'єднань із БД та журнал повільних запитів
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    slow_query_ms: int = 200
+
+    # Кеш і журнал подій
+    cache_ttl_seconds: int = 60
+    events_retention_days: int = 7
+    replay_limit: int = 200
+
+    # Ліміт вхідних подій WebSocket на одне з'єднання
+    ws_rate_limit_events: int = 30
+    ws_rate_limit_window_seconds: int = 10
+
+    # Метрики Prometheus: якщо задано токен, /metrics вимагає заголовок Authorization: Bearer <токен>
+    metrics_token: str | None = None
+
+    # Автоматичні «тихі години»
+    auto_pricing_enabled: bool = False
+    auto_pricing_interval_hours: int = 24
+    auto_pricing_weeks: int = 8
+    auto_pricing_min_bookings: int = 30   # менше історії, і система нічого не пропонує
+    auto_quiet_threshold: float = 0.30    # завантаженість нижче 30%, і година вважається тихою
+    auto_discount_max: int = 15           # максимальна автоматична знижка, %
+    auto_discount_step: int = 5
+
     seed_admin_email: str = "admin@example.com"
     seed_admin_password: str = "change-me-please"
 
@@ -49,6 +81,11 @@ class Settings(BaseSettings):
     @property
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
+
+    @property
+    def cors_origins(self) -> list[str]:
+        extra = [o.strip() for o in self.extra_cors_origins.split(",") if o.strip()]
+        return [self.frontend_url, *extra]
 
     @property
     def upload_path(self) -> Path:

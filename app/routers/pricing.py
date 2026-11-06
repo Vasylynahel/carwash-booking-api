@@ -2,6 +2,8 @@ from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 
 from app.core.audit import Audit
+from app.realtime import publisher
+from app.services import pricing_service
 from app.core.auth import AdminUser
 from app.core.errors import BusinessRuleError, NotFoundError
 from app.core.pagination import paginate
@@ -25,19 +27,28 @@ def create_rule(data: PricingRuleCreate, admin: AdminUser, db: DbSession, audit:
     rule = PricingRule(**data.model_dump())
     db.add(rule)
     db.commit()
+    pricing_service.invalidate_rules()
     audit.log("pricing_rule.create", admin, "pricing_rule", rule.id)
+    publisher.publish_catalog("pricing_rule", rule.id, "created")
     return rule
 
 
 @router.get("", response_model=Page[PricingRuleRead])
 def list_rules(
-    admin: AdminUser, db: DbSession, pager: Pager, is_active: bool | None = None, weekday: int | None = None
+    admin: AdminUser,
+    db: DbSession,
+    pager: Pager,
+    is_active: bool | None = None,
+    weekday: int | None = None,
+    is_auto: bool | None = None,
 ):
     stmt = select(PricingRule).order_by(PricingRule.weekday.nulls_first(), PricingRule.start_time)
     if is_active is not None:
         stmt = stmt.where(PricingRule.is_active.is_(is_active))
     if weekday is not None:
         stmt = stmt.where(PricingRule.weekday == weekday)
+    if is_auto is not None:
+        stmt = stmt.where(PricingRule.is_auto.is_(is_auto))
     return paginate(db, stmt, pager)
 
 
@@ -57,7 +68,9 @@ def update_rule(rule_id: int, data: PricingRuleUpdate, admin: AdminUser, db: DbS
         db.rollback()
         raise BusinessRuleError("Початок діапазону має бути раніше за його кінець")
     db.commit()
+    pricing_service.invalidate_rules()
     audit.log("pricing_rule.update", admin, "pricing_rule", rule.id, {"fields": sorted(changes)})
+    publisher.publish_catalog("pricing_rule", rule.id, "updated")
     return rule
 
 
@@ -66,5 +79,7 @@ def delete_rule(rule_id: int, admin: AdminUser, db: DbSession, audit: Audit):
     rule = _get_or_404(db, rule_id)
     db.delete(rule)
     db.commit()
+    pricing_service.invalidate_rules()
     audit.log("pricing_rule.delete", admin, "pricing_rule", rule_id)
+    publisher.publish_catalog("pricing_rule", rule_id, "deleted")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

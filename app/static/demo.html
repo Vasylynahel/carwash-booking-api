@@ -1,0 +1,59 @@
+<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>WebSocket демо</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:system-ui,sans-serif;max-width:900px;margin:1.5rem auto;padding:0 1rem}
+fieldset{margin-bottom:1rem;border:1px solid #ccc;border-radius:8px}
+input,button{padding:.4rem .6rem;margin:.15rem}
+#log{background:#111;color:#cde;padding:.8rem;border-radius:8px;height:320px;overflow:auto;font:12px/1.5 monospace;white-space:pre-wrap}
+.ok{color:#6c6}.bad{color:#f66}.n{color:#fc6}
+#status{font-weight:600}
+</style></head><body>
+<h2>Carwash: демо реального часу</h2>
+<fieldset><legend>1. Вхід</legend>
+<input id="email" placeholder="email" value="admin@example.com">
+<input id="password" type="password" placeholder="пароль">
+<button onclick="login()">Увійти й підключитись</button>
+<button onclick="logoutNow()">Відключитись</button>
+<div>Стан: <span id="status">не підключено</span> · остання подія: <b id="last">0</b></div>
+</fieldset>
+<fieldset><legend>2. Підписка на слоти за датою</legend>
+<input id="day" type="date"><button onclick="subscribe()">Стежити за слотами</button>
+<button onclick="replay()">Запросити пропущені події</button>
+<button onclick="presence()">Хто онлайн (адмін)</button>
+</fieldset>
+<div id="log"></div>
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let socket=null, lastId=0, token=null;
+const log=(cls,t)=>{const d=$('log');d.insertAdjacentHTML('beforeend',`<div class="${cls}">${new Date().toLocaleTimeString()} ${t}</div>`);d.scrollTop=d.scrollHeight};
+$('day').valueAsDate=new Date(Date.now()+864e5);
+
+async function login(){
+  const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:$('email').value,password:$('password').value})});
+  const j=await r.json();
+  if(!r.ok){log('bad','Вхід не вдався: '+(j.error||r.status));return}
+  token=j.tokens.access_token; log('ok','Увійшли як '+j.user.full_name+' ('+j.user.role+')'); connect();
+}
+function connect(){
+  if(socket) socket.disconnect();
+  // auth — функція: при кожному (пере)підключенні береться актуальний токен
+  socket=io({auth:cb=>cb({token})});
+  socket.on('connect',()=>{$('status').textContent='підключено';log('ok','connect '+socket.id);replay()});
+  socket.on('disconnect',r=>{$('status').textContent='відключено';log('bad','disconnect: '+r)});
+  socket.on('connect_error',e=>log('bad','connect_error: '+e.message));
+  socket.on('auth:expired',()=>log('bad','токен прострочено: оновіть його через /api/auth/refresh і підключіться знову'));
+  for(const ev of ['booking:created','booking:updated','booking:status','booking:deleted','slots:changed','catalog:changed','presence:update','notification']){
+    socket.on(ev,p=>{ if(p.id){lastId=Math.max(lastId,p.id);$('last').textContent=lastId}
+      log(ev==='notification'?'n':'',ev+' '+JSON.stringify(p.data))});
+  }
+}
+function subscribe(){socket.emit('slots:subscribe',{date:$('day').value},r=>log('',JSON.stringify(r)))}
+function replay(){socket.emit('events:since',{last_id:lastId},r=>{
+  if(!r||!r.ok){log('bad','events:since '+JSON.stringify(r));return}
+  r.events.forEach(e=>{lastId=Math.max(lastId,e.id);log('n','[пропущено] '+e.type+' '+JSON.stringify(e.data))});
+  $('last').textContent=lastId; log('',`відновлення: ${r.events.length} подій${r.has_more?' (є ще)':''}`)})}
+function presence(){socket.emit('presence:list',{},r=>log('',JSON.stringify(r)))}
+function logoutNow(){if(socket)socket.disconnect()}
+</script></body></html>

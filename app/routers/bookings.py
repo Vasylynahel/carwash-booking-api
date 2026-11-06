@@ -9,6 +9,8 @@ from app.core.errors import BusinessRuleError, ForbiddenError
 from app.core.pagination import paginate
 from app.deps import DbSession, Pager
 from app.models import Booking, BookingStatus, User, UserRole
+from app.realtime import publisher
+from app.services import notification_service
 from app.schemas.booking import (
     BookingCreate,
     BookingRead,
@@ -66,6 +68,8 @@ def create_booking(data: BookingCreate, user: CurrentUser, db: DbSession, audit:
         "booking.create", user, "booking", booking.id,
         {"total_price": str(booking.total_price), "discount_percent": str(booking.discount_percent)},
     )
+    publisher.publish_booking(db, "booking:created", booking)
+    notification_service.on_booking_created(db, booking)
     return booking
 
 
@@ -130,6 +134,8 @@ def get_booking(booking_id: int, user: CurrentUser, db: DbSession):
 def update_booking(booking_id: int, data: BookingUpdate, admin: AdminUser, db: DbSession, audit: Audit):
     booking = svc.assign_master(db, booking_id, data.master_id)
     audit.log("booking.assign_master", admin, "booking", booking.id, {"master_id": data.master_id})
+    publisher.publish_booking(db, "booking:updated", booking)
+    notification_service.on_master_assigned(db, booking)
     return booking
 
 
@@ -140,11 +146,15 @@ def update_status(booking_id: int, data: BookingStatusUpdate, user: CurrentUser,
     old = booking.status.value
     booking = svc.change_status(db, booking_id, data.status)
     audit.log("booking.status", user, "booking", booking.id, {"from": old, "to": data.status.value})
+    publisher.publish_booking(db, "booking:status", booking)
+    notification_service.on_status_changed(db, booking, user, data.status)
     return booking
 
 
 @router.delete("/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_booking(booking_id: int, admin: AdminUser, db: DbSession, audit: Audit):
+    booking = svc.get_booking(db, booking_id)
     svc.delete_booking(db, booking_id)
     audit.log("booking.delete", admin, "booking", booking_id)
+    publisher.publish_booking(db, "booking:deleted", booking)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

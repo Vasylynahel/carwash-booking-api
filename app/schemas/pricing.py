@@ -42,4 +42,5 @@ class PricingRuleRead(BaseModel):
     end_time: time
     discount_percent: Decimal
     is_active: bool
+    is_auto: bool
     created_at: datetime

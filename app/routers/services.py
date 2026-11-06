@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import select
 
 from app.core.audit import Audit
+from app.realtime import publisher
 from app.core.auth import AdminUser
 from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import paginate
@@ -37,6 +38,7 @@ def create_service(data: ServiceCreate, admin: AdminUser, db: DbSession, audit: 
     db.add(service)
     db.commit()
     audit.log("service.create", admin, "service", service.id)
+    publisher.publish_catalog("service", service.id, "created")
     return service
 
 
@@ -73,6 +75,7 @@ def update_service(service_id: int, data: ServiceUpdate, admin: AdminUser, db: D
         setattr(service, field, value)
     db.commit()
     audit.log("service.update", admin, "service", service.id, {"fields": sorted(changes)})
+    publisher.publish_catalog("service", service.id, "updated")
     return service
 
 
@@ -82,4 +85,5 @@ def delete_service(service_id: int, admin: AdminUser, db: DbSession, audit: Audi
     db.delete(service)
     db.commit()  # послугу, що є в записах, не видалити: деактивуйте її через PATCH (is_active=false)
     audit.log("service.delete", admin, "service", service_id)
+    publisher.publish_catalog("service", service_id, "deleted")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
