@@ -1,0 +1,26 @@
+# Blueprint для Render: https://render.com/docs/blueprint-spec
+# Базу даних тут не створюємо: безкоштовна база Render діє обмежений час (див. docs/DEPLOY.md),
+# тому DATABASE_URL береться з зовнішнього постачальника (Neon, Supabase тощо)
+services:
+  - type: web
+    name: carwash-booking-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false          # вводиться вручну в панелі Render
+      - key: JWT_SECRET
+        generateValue: true
+      - key: REFRESH_TOKEN_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false          # адреса клієнта на Vercel/Netlify
+      - key: EXTRA_CORS_ORIGINS
+        value: ""
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: METRICS_TOKEN
+        generateValue: true
